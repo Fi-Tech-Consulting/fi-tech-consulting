@@ -1,15 +1,15 @@
-name: Deploy bundle to FTP
+name: Deploy bundle to website (SFTP)
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-ftp
+  group: deploy-sftp
   cancel-in-progress: true
 
 jobs:
@@ -30,12 +30,12 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+      - name: Deploy via SFTP (SSH)
+        uses: appleboy/scp-action@v1
         with:
-          server: ${{ secrets.FTP_SERVER_URL }}
+          host: ${{ secrets.FTP_SERVER_URL }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           port: ${{ secrets.FTP_PORT }}
-          local-dir: dist/
-          server-dir: /
+          source: "dist/*"
+          target: "/"
