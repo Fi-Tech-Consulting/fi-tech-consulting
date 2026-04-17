@@ -79,7 +79,12 @@ const quickLinks = [
                 </a>
                 <div class="flex items-start gap-3 text-slate-400">
                   <MapPin class="h-5 w-5 shrink-0 text-blue-500" />
-                  <span>Schoolstraat 15C, 2511AW, Den Haag, Netherlands</span>
+                  <div class="flex flex-col gap-1">
+                    <span>Texas, United State of America</span>
+                    <span>Den Haag, Netherlands</span>
+                    <span>Lagos, Nigeria</span>
+                    <span>Harare, Zimbabwe</span>
+                  </div>
                 </div>
                 <div class="flex items-center gap-3 text-slate-400">
                   <MessageSquare class="h-5 w-5 shrink-0 text-blue-500" />
