@@ -1,0 +1,111 @@
+# Runs after "Deploy bundle to FTP" fully completes so job logs are available.
+# IMPORTANT: this file must exist on your default branch (main) or it will not run.
+# See: https://github.com/orgs/community/discussions/48258
+name: Deploy PR failure notification
+
+on:
+  workflow_run:
+    workflows: [Deploy bundle to FTP]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  notify:
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on PR with failure logs
+        uses: actions/github-script@v7
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const { execSync } = require('child_process');
+
+            const workflowRun = context.payload.workflow_run;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const repoSlug = `${owner}/${repo}`;
+            const runId = workflowRun.id;
+            const runUrl = workflowRun.html_url;
+
+            let prNumber = workflowRun.pull_requests?.[0]?.number;
+            if (!prNumber) {
+              const { data: pulls } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                head: `${owner}:${workflowRun.head_branch}`,
+              });
+              prNumber = pulls[0]?.number;
+            }
+
+            if (!prNumber) {
+              core.setFailed(
+                `Could not resolve PR number for branch ${workflowRun.head_branch}.`
+              );
+              return;
+            }
+
+            let logs = '';
+            try {
+              logs = execSync(
+                `gh run view ${runId} --repo ${repoSlug} --log-failed`,
+                { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+              );
+            } catch (error) {
+              logs = [error.stdout, error.stderr, error.message]
+                .filter(Boolean)
+                .join('\n');
+            }
+
+            const maxLen = 60000;
+            if (logs.length > maxLen) {
+              logs = `…(truncated, showing last ${maxLen} characters)\n\n` + logs.slice(-maxLen);
+            }
+
+            const marker = '<!-- deploy-workflow-failure -->';
+            const body = [
+              marker,
+              '### Deploy workflow failed',
+              '',
+              `Workflow run: [view logs](${runUrl})`,
+              '',
+              '<details>',
+              '<summary>Failed job logs</summary>',
+              '',
+              '```',
+              logs.trim() || 'No failed job logs were returned.',
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
