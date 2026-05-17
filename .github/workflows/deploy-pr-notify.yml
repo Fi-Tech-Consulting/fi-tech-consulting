@@ -1,4 +1,5 @@
 # Runs after "Deploy bundle to FTP" fully completes so job logs are available.
+# IMPORTANT: this file must exist on your default branch (main) or it will not run.
 # See: https://github.com/orgs/community/discussions/48258
 name: Deploy PR failure notification
 
