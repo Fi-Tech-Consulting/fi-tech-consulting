@@ -2,16 +2,17 @@ name: Deploy bundle to FTP
 
 on:
   push:
-    branches: 
+    branches:
       - main
   pull_request:
-    branches: 
+    branches:
       - main
   workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: write
+  actions: read
 
 concurrency:
   group: deploy-ftp-${{ github.event.pull_request.number || github.ref }}
@@ -45,27 +46,63 @@ jobs:
           local-dir: dist/
           server-dir: /
 
+  notify-pr-failure:
+    needs: deploy
+    if: failure() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
       - name: Comment on PR with failure logs
-        if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         env:
           GH_TOKEN: ${{ github.token }}
         with:
           script: |
             const { execSync } = require('child_process');
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
             const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
             const prNumber = context.payload.pull_request.number;
+
+            const { data: { jobs } } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const failedJob = jobs.find((job) => job.conclusion === 'failure');
+            if (!failedJob) {
+              core.setFailed('No failed job found in this workflow run.');
+              return;
+            }
 
             let logs = '';
             try {
               logs = execSync(
-                `gh run view ${context.runId} --repo ${context.repo.owner}/${context.repo.repo} --log-failed`,
+                `gh run view ${context.runId} --repo ${repo} --job ${failedJob.id} --log-failed`,
                 { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
               );
             } catch (error) {
-              logs = [error.stdout, error.stderr, error.message]
-                .filter(Boolean)
-                .join('\n');
+              try {
+                const zipPath = '/tmp/failed-job-logs.zip';
+                execSync(
+                  `gh api repos/${context.repo.owner}/${context.repo.repo}/actions/jobs/${failedJob.id}/logs > ${zipPath}`,
+                  { encoding: 'utf8' }
+                );
+                logs = execSync(`unzip -p ${zipPath}`, {
+                  encoding: 'utf8',
+                  maxBuffer: 10 * 1024 * 1024,
+                });
+              } catch (fallbackError) {
+                logs = [
+                  error.stdout,
+                  error.stderr,
+                  error.message,
+                  fallbackError.stdout,
+                  fallbackError.stderr,
+                  fallbackError.message,
+                ]
+                  .filter(Boolean)
+                  .join('\n');
+              }
             }
 
             const maxLen = 60000;
@@ -77,6 +114,8 @@ jobs:
             const body = [
               marker,
               '### Deploy workflow failed',
+              '',
+              `Failed job: **${failedJob.name}**`,
               '',
               `Workflow run: [view logs](${runUrl})`,
               '',
