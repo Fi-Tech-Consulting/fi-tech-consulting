@@ -2,14 +2,19 @@ name: Deploy bundle to FTP
 
 on:
   push:
-    branches: [main, development]
+    branches: 
+      - main
+  pull_request:
+    branches: 
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
-  group: deploy-ftp
+  group: deploy-ftp-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,8 +38,78 @@ jobs:
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.6
         with:
-          server: ftp.dahstack.com.ng
+          server: ${{ secrets.FTP_SERVER_URL }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
+          port: ${{ secrets.FTP_PORT }}
           local-dir: dist/
           server-dir: /
+
+      - name: Comment on PR with failure logs
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
+            const prNumber = context.payload.pull_request.number;
+
+            let logs = '';
+            try {
+              logs = execSync(
+                `gh run view ${context.runId} --repo ${context.repo.owner}/${context.repo.repo} --log-failed`,
+                { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+              );
+            } catch (error) {
+              logs = [error.stdout, error.stderr, error.message]
+                .filter(Boolean)
+                .join('\n');
+            }
+
+            const maxLen = 60000;
+            if (logs.length > maxLen) {
+              logs = `…(truncated, showing last ${maxLen} characters)\n\n` + logs.slice(-maxLen);
+            }
+
+            const marker = '<!-- deploy-workflow-failure -->';
+            const body = [
+              marker,
+              '### Deploy workflow failed',
+              '',
+              `Workflow run: [view logs](${runUrl})`,
+              '',
+              '<details>',
+              '<summary>Failed job logs</summary>',
+              '',
+              '```',
+              logs.trim() || 'No failed job logs were returned.',
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
